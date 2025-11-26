@@ -101,15 +101,18 @@ export default function Employees({ auth = mockAuth, employees: initialEmployees
     supervisor: '',
     salary: '',
     status: 'Active',
+    is_user: false, // checkbox to create user account
   });
 
   const [formErrors, setFormErrors] = useState({});
   const [saving, setSaving] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
 
+  // handle checkboxes and text inputs
   const handleInputChange = (e) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
+    const { name, value, type, checked } = e.target;
+    const val = type === 'checkbox' ? checked : value;
+    setFormData(prev => ({ ...prev, [name]: val }));
     if (formErrors[name]) setFormErrors(prev => ({ ...prev, [name]: '' }));
   };
 
@@ -187,6 +190,7 @@ export default function Employees({ auth = mockAuth, employees: initialEmployees
       salary: formData.salary ? Number(formData.salary) : 0,
       status: formData.status || 'Active',
       isSupervisor: false,
+      is_user: !!formData.is_user,
     };
 
     try {
@@ -202,6 +206,7 @@ export default function Employees({ auth = mockAuth, employees: initialEmployees
             resetForm();
           },
           onError: (errs) => {
+            // Inertia validation errors come as page.props.errors normally; onError callback provides them
             setFormErrors(errs || {});
             setSaving(false);
           },
@@ -253,6 +258,7 @@ export default function Employees({ auth = mockAuth, employees: initialEmployees
       supervisor: '',
       salary: '',
       status: 'Active',
+      is_user: false,
     });
     setFormErrors({});
     setShowAddForm(false);
@@ -263,15 +269,18 @@ export default function Employees({ auth = mockAuth, employees: initialEmployees
 
   // ---------- Robust route helpers & handlers ----------
   // Helper to resolve the id we should use for routes (prefer original_id if present)
-  const routeId = (emp) => {
-    if (emp === null || emp === undefined) return emp;
-    // emp could be an object or primitive id
-    if (typeof emp === 'object') {
-      // prefer original_id, fallback to id, fallback to null
-      return emp.original_id ?? emp.id ?? null;
-    }
-    return emp;
-  };
+ const routeId = (emp) => {
+  if (!emp) return null;
+
+  // If Laravel employees come with real DB ID
+  if (emp?.original_id) return emp.original_id;
+
+  // Your mock employees already have correct IDs
+  if (emp?.id && emp.id > 100) return emp.id;
+
+  // Fallback (avoid renumbered id)
+  return emp?.original_id ?? null;
+};
 
   // Safe builder: try to build a Ziggy route URL, but return a fallback path string if route() fails
   const buildRouteUrl = (name, id, extraPath = '') => {
@@ -285,7 +294,6 @@ export default function Employees({ auth = mockAuth, employees: initialEmployees
       }
     } catch (err) {
       // ignore and fallback
-      // console.warn('Ziggy route() failed:', err);
     }
     // fallback to predictable RESTful paths
     if (extraPath) return `/employees/${safeId}/${extraPath}`;
@@ -299,14 +307,23 @@ export default function Employees({ auth = mockAuth, employees: initialEmployees
       return;
     }
 
-    const url = buildRouteUrl('employees.show', idToUse);
+    // Try Ziggy named route first, otherwise fallback to RESTful path
+    let url = '';
+    try {
+      if (typeof route !== 'undefined') {
+        url = route('employees.show', idToUse);
+      }
+    } catch (err) {
+      // ignore
+    }
+    if (!url) url = `/employees/${encodeURIComponent(idToUse)}`;
 
     if (typeof router !== 'undefined' && typeof router.get === 'function') {
       try {
         router.get(url);
         return;
       } catch (err) {
-        console.warn('router.get failed for view, falling back to href:', err);
+        console.warn('router.get failed for view, falling back to location.href:', err);
       }
     }
 
@@ -320,23 +337,24 @@ export default function Employees({ auth = mockAuth, employees: initialEmployees
       return;
     }
 
-    // Try Ziggy named route for edit, but fallback if it throws
-    let url;
+    let url = '';
     try {
       if (typeof route !== 'undefined') {
+        // Ziggy may provide a named edit route
         url = route('employees.edit', idToUse);
       }
     } catch (err) {
       // ignore
     }
-    if (!url) url = buildRouteUrl('employees.show', idToUse, 'edit'); // fallback -> /employees/:id/edit
+    // If Ziggy not available, fallback to conventional edit path
+    if (!url) url = `/employees/${encodeURIComponent(idToUse)}/edit`;
 
     if (typeof router !== 'undefined' && typeof router.get === 'function') {
       try {
         router.get(url);
         return;
       } catch (err) {
-        console.warn('router.get failed for edit, falling back to href:', err);
+        console.warn('router.get failed for edit, falling back to location.href:', err);
       }
     }
 
@@ -391,6 +409,43 @@ export default function Employees({ auth = mockAuth, employees: initialEmployees
     { number: 3, title: 'Documents & Review', icon: '📄' }
   ];
 
+  // -- small helpers for top nav/profile links to prefer router.get/post when available
+  const navigateTo = (namedRoute, fallbackPath = '/') => {
+    let url = '';
+    try { if (typeof route !== 'undefined') url = route(namedRoute); } catch (e) { /* ignore */ }
+    if (!url) url = fallbackPath;
+    if (typeof router !== 'undefined' && typeof router.get === 'function') {
+      try { router.get(url); return; } catch (e) { /* ignore */ }
+    }
+    window.location.href = url;
+  };
+
+  const performLogout = () => {
+    let logoutUrl = '';
+    try { if (typeof route !== 'undefined') logoutUrl = route('logout'); } catch (e) { /* ignore */ }
+    if (!logoutUrl) logoutUrl = '/logout';
+
+    if (typeof router !== 'undefined' && typeof router.post === 'function') {
+      router.post(logoutUrl);
+      return;
+    }
+
+    // fallback submit form with CSRF token if available
+    const f = document.createElement('form');
+    f.method = 'POST';
+    f.action = logoutUrl;
+    const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+    if (token) {
+      const i = document.createElement('input');
+      i.type = 'hidden';
+      i.name = '_token';
+      i.value = token;
+      f.appendChild(i);
+    }
+    document.body.appendChild(f);
+    f.submit();
+  };
+
   return (
     <>
       <Head title="Employees" />
@@ -423,11 +478,24 @@ export default function Employees({ auth = mockAuth, employees: initialEmployees
           </div>
 
           <nav style={{ flex: 1, padding: '1.5rem 1rem', overflowY: 'auto' }}>
-            <Link href={typeof route !== 'undefined' ? route('dashboard') : '/dashboard'} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '0.9rem 1rem', color: '#64748b', textDecoration: 'none', borderRadius: 10, marginBottom: '0.5rem' }}>Dashboard</Link>
-            <Link href={typeof route !== 'undefined' ? route('employees.index') : '/employees'} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '0.9rem 1rem', color: '#334155', textDecoration: 'none', borderRadius: 10, marginBottom: '0.5rem', background: 'rgba(51,65,85,0.04)' }}>
+            {/* Dashboard link (robust) */}
+            <a
+              href={typeof route !== 'undefined' ? (route('dashboard') ?? '/dashboard') : '/dashboard'}
+              onClick={(e) => { e.preventDefault(); navigateTo('dashboard', '/dashboard'); }}
+              style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '0.9rem 1rem', color: '#64748b', textDecoration: 'none', borderRadius: 10, marginBottom: '0.5rem' }}
+            >
+              Dashboard
+            </a>
+
+            {/* Employees link (robust) */}
+            <a
+              href={typeof route !== 'undefined' ? (route('employees.index') ?? '/employees') : '/employees'}
+              onClick={(e) => { e.preventDefault(); navigateTo('employees.index', '/employees'); }}
+              style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '0.9rem 1rem', color: '#334155', textDecoration: 'none', borderRadius: 10, marginBottom: '0.5rem', background: 'rgba(51,65,85,0.04)' }}
+            >
               Employees
               <span style={{ marginLeft: 'auto', background: '#334155', color: 'white', padding: '3px 10px', borderRadius: 20, fontSize: '0.75rem', fontWeight: 700 }}>{employeesList.length}</span>
-            </Link>
+            </a>
           </nav>
 
           <button onClick={() => setSidebarCollapsed(s => !s)} style={{ position: 'absolute', right: -12, top: '50%', transform: 'translateY(-50%)', width: 24, height: 24, borderRadius: '50%', background: 'white', border: '2px solid #e2e8f0', cursor: 'pointer' }}>
@@ -454,8 +522,22 @@ export default function Employees({ auth = mockAuth, employees: initialEmployees
 
                 {profileOpen && (
                   <div style={{ position: 'absolute', top: 'calc(100% + 8px)', right: 0, background: 'white', borderRadius: 12, boxShadow: '0 10px 40px rgba(0,0,0,0.12)', minWidth: 220, border: '1px solid #e2e8f0' }}>
-                    <Link href={typeof route !== 'undefined' ? route('profile.edit') : '/profile'} style={{ display: 'block', padding: '1rem 1.25rem', color: '#475569', textDecoration: 'none' }}>My Profile</Link>
-                    <Link href={typeof route !== 'undefined' ? route('logout') : '/logout'} method="post" as="button" style={{ display: 'block', padding: '1rem 1.25rem', color: '#ef4444', textDecoration: 'none', borderTop: '1px solid #f1f5f9', background: 'transparent', width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer' }}>Logout</Link>
+                    {/* My Profile */}
+                    <a
+                      href={typeof route !== 'undefined' ? (route('profile.edit') ?? '/profile') : '/profile'}
+                      onClick={(e) => { e.preventDefault(); navigateTo('profile.edit', '/profile'); }}
+                      style={{ display: 'block', padding: '1rem 1.25rem', color: '#475569', textDecoration: 'none' }}
+                    >
+                      My Profile
+                    </a>
+
+                    {/* Logout (POST) */}
+                    <button
+                      onClick={(e) => { e.preventDefault(); performLogout(); }}
+                      style={{ display: 'block', padding: '1rem 1.25rem', color: '#ef4444', textDecoration: 'none', borderTop: '1px solid #f1f5f9', background: 'transparent', width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer' }}
+                    >
+                      Logout
+                    </button>
                   </div>
                 )}
               </div>
@@ -946,6 +1028,12 @@ export default function Employees({ auth = mockAuth, employees: initialEmployees
                             <div style={{ fontSize: '0.95rem', fontWeight: 600, color: '#1e293b' }}>{formData.joining_date || '—'}</div>
                           </div>
                         </div>
+                      </div>
+
+                      {/* Checkbox: create user account */}
+                      <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <input id="is_user" name="is_user" type="checkbox" checked={!!formData.is_user} onChange={handleInputChange} />
+                        <label htmlFor="is_user" style={{ fontWeight: 600, color: '#1e293b' }}>Create a user account for this employee</label>
                       </div>
 
                       <div style={{ marginTop: '1.5rem', padding: '1rem', background: '#f0fdf4', borderLeft: '4px solid #10b981', borderRadius: 8 }}>
